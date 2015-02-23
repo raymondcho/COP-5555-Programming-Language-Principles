@@ -178,11 +178,9 @@ public class SimpleParser {
 					}
 				}
 			}
-			if (t.kind == Kind.SEMICOLON) {
-				match(SEMICOLON);
-				if (t.kind != Kind.KW_IMPORT) {
-					break;
-				}
+			match(SEMICOLON);
+			if (t.kind != Kind.KW_IMPORT) {
+				break;
 			}
 		}
 		return;
