@@ -2,7 +2,7 @@ package cop5555sp15.ast;
 
 import cop5555sp15.TokenStream.Token;
 
-public class RangeExpression extends ASTNode {
+public class RangeExpression extends Expression {
 	Expression lower;
 	Expression upper;
 

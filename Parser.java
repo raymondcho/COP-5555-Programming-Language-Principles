@@ -2,6 +2,7 @@ package cop5555sp15;
 
 import static cop5555sp15.TokenStream.Kind.*;
 
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -47,16 +48,11 @@ public class Parser {
 			return sb.toString();
 		}
 	}
-
-	@SuppressWarnings("serial")
-	public class ParseException extends Exception {
-		
-	}
 	
-	List<SyntaxException> exceptionList = new LinkedList<>();
-	TokenStream tokens;
-	Token t;
-	Token consumedToken;
+	private List<SyntaxException> exceptionList = new ArrayList<>();
+	private TokenStream tokens;
+	private Token t;
+	private Token consumedToken;
 
 	Parser(TokenStream tokens) {
 		this.tokens = tokens;
@@ -69,9 +65,7 @@ public class Parser {
 			consume();
 			return kind;
 		}
-		SyntaxException syntaxException = new SyntaxException(t, kind);
-		exceptionList.add(syntaxException);
-		throw syntaxException;
+		throw new SyntaxException(t, kind);
 	}
 
 	private Kind match(Kind... kinds) throws SyntaxException {
@@ -84,9 +78,7 @@ public class Parser {
 		for (Kind kind1 : kinds) {
 			sb.append(kind1).append(kind1).append(" ");
 		}
-		SyntaxException syntaxException = new SyntaxException(t, "expected one of " + sb.toString());
-		exceptionList.add(syntaxException);
-		throw syntaxException;
+		throw new SyntaxException(t, "expected one of " + sb.toString());
 	}
 
 	private boolean isKind(Kind kind) {
@@ -94,9 +86,10 @@ public class Parser {
 	}
 
 	private void consume() {
-		if (t.kind != EOF)
+		if (t.kind != EOF) {
 			consumedToken = t;
 			t = tokens.nextToken();
+		}
 	}
 
 	private boolean isKind(Kind... kinds) {
@@ -121,19 +114,19 @@ public class Parser {
 											  MOD, Kind.KW_RETURN};
 
 
+	public List<SyntaxException> getExceptionList() {
+		return exceptionList;
+	}
+	
 	public Program parse() {
 		Program p = null;
 		try {
 			p = Program();
 			if (p != null) {
-				try {
-					match(EOF);
-				} catch (SyntaxException e) {
-					exceptionList.add(e);
-				}
+				match(EOF);
 			}
-		} catch (ParseException e) {
-			return null;
+		} catch (SyntaxException e) {
+			exceptionList.add(e);
 		}
 		if (exceptionList.isEmpty()) {
 			return p;
@@ -142,29 +135,23 @@ public class Parser {
 		}
 	}
 
-	private Program Program() throws ParseException {
-		try {
-			Token firstToken = t;
-			List<QualifiedName> imports = ImportList();
-			match(KW_CLASS);
-			match(IDENT);
-			String className = consumedToken.getText();
-			Block block = Block();
-			return new Program(firstToken, imports, className, block);
-		} catch (SyntaxException e) {
-			exceptionList.add(e);
-			throw new ParseException();
-		}
+	private Program Program() throws SyntaxException {
+		Token firstToken = t;
+		List<QualifiedName> imports = ImportList();
+		match(KW_CLASS);
+		match(IDENT);
+		String className = consumedToken.getText();
+		Block block = Block();
+		return new Program(firstToken, imports, className, block);
 	}
 
 	private List<QualifiedName> ImportList() throws SyntaxException {
 		List<QualifiedName> imports = new LinkedList<>();
 		while (true) {
-			try {
-				match(KW_IMPORT);
-			} catch (SyntaxException synEx) {
+			if (t.kind != KW_IMPORT) {
 				return imports;
 			}
+			match(KW_IMPORT);
 			StringBuilder importNameBuilder = new StringBuilder();
 			Token firstToken = t;
 			match(IDENT);
@@ -200,7 +187,10 @@ public class Parser {
 			} else if (t.kind == RCURLY){
 				break;
 			} else {
-				blockElems.add(Statement());
+				Statement statement = Statement();
+				if (statement != null) {
+					blockElems.add(statement);
+				}
 				match(SEMICOLON);
 			}
 		}
@@ -314,48 +304,61 @@ public class Parser {
 		if (t.kind == IDENT) {
 			LValue lValue = LValue();
 			match(ASSIGN);
-			Expression(false, false);
-			return;
+			Expression lValueExpression = Expression(false, false);
+			return new AssignmentStatement(firstToken, lValue, lValueExpression);
 		}
 		if (t.kind == KW_PRINT) {
 			match(KW_PRINT);
-			Expression(false, false);
-			return;
+			Expression printExpression = Expression(false, false);
+			return new PrintStatement(firstToken, printExpression);
 		}
 		if (t.kind == KW_WHILE) {
 			match(Kind.KW_WHILE);
+			boolean isStar = false;
 			if (t.kind == TIMES) {
 				match(TIMES);
+				isStar = true;
 			}
 			match(LPAREN);
-			Expression(false, true);
+			Expression whileExpression = Expression(false, true);
 			match(RPAREN);
-			Block();
-			return;
+			Block block = Block();
+			if (isStar) {
+				if (whileExpression instanceof RangeExpression) {
+					return new WhileRangeStatement(firstToken, (RangeExpression) whileExpression, block);
+				}
+				return new WhileStarStatement(firstToken, whileExpression, block);
+			} else {
+				return new WhileStatement(firstToken, whileExpression, block);
+			}
 		}
 		if (t.kind == KW_IF) {
 			match(Kind.KW_IF);
 			match(LPAREN);
-			Expression(false, false);
+			Expression ifExpression = Expression(false, false);
 			match(RPAREN);
-			Block();
+			Block ifBlock = Block();
+			Block elseBlock = null;
 			if (t.kind == Kind.KW_ELSE) {
 				match(Kind.KW_ELSE);
-				Block();
+				elseBlock = Block();
 			}
-			return;
+			if (elseBlock == null) {
+				return new IfStatement(firstToken, ifExpression, ifBlock);
+			}
+			return new IfElseStatement(firstToken, ifExpression, ifBlock, elseBlock);
 		}
 		if (t.kind == MOD) {
 			match(MOD);
-			Expression(false, false);
-			return;
+			Expression modExpression = Expression(false, false);
+			return new ExpressionStatement(firstToken, modExpression);
 		}
 		if (t.kind == KW_RETURN) {
 			match(Kind.KW_RETURN);
-			Expression(false, false);
-			return;
+			Expression returnExpression = Expression(false, false);
+			return new ReturnStatement(firstToken, returnExpression);
 		}
-		return;
+		return null;
 	}
 	
 	private LValue LValue() throws SyntaxException {
@@ -379,12 +382,18 @@ public class Parser {
 			if (isKind(REL_OPS)) {
 				relOp = RelOp();
 				rightTerm = Term();
+				leftTerm = new BinaryExpression(leftTerm.firstToken, leftTerm, relOp, rightTerm);
+				relOp = null;
+				rightTerm = null;
 			} else {
 				break;
 			}
 		}
 		if (!transferFromRangeExpr && allowTransferToRangeExpr && t.kind == RANGE) {
-			RangeExpression(true);
+			if (relOp == null && rightTerm == null) {
+				return RangeExpression(leftTerm);
+			}
+			return RangeExpression(new BinaryExpression(leftTerm.firstToken, leftTerm, relOp, rightTerm));
 		}
 		if (relOp == null && rightTerm == null) {
 			return leftTerm;
@@ -392,13 +401,13 @@ public class Parser {
 		return new BinaryExpression(leftTerm.firstToken, leftTerm, relOp, rightTerm);
 	}
 	
-	private void RangeExpression(final boolean transferFromExpression) throws SyntaxException {
-		if (!transferFromExpression) {
-			Expression(true, false);
+	private RangeExpression RangeExpression(Expression leftExpression) throws SyntaxException {
+		if (leftExpression == null) {
+			leftExpression = Expression(true, false);
 		}
 		match(RANGE);
-		Expression(true, false);
-		return;
+		Expression rightExpression = Expression(true, false);
+		return new RangeExpression(leftExpression.firstToken, leftExpression, rightExpression);
 	}
 	
 	private Token RelOp() throws SyntaxException {
@@ -414,6 +423,9 @@ public class Parser {
 			if (isKind(WEAK_OPS)) {
 				weakOp = WeakOp();
 				rightElem = Elem();
+				leftElem = new BinaryExpression(leftElem.firstToken, leftElem, weakOp, rightElem);
+				weakOp = null;
+				rightElem = null;
 			} else {
 				break;
 			}
@@ -430,37 +442,55 @@ public class Parser {
 	}
 	
 	private Expression Elem() throws SyntaxException {
-		Expression thing = Thing();
+		Expression leftThing = Thing();
+		Token strongOp = null;
+		Expression rightThing = null;
 		while (true) {
 			if (isKind(STRONG_OPS)) {
-				StrongOp();
-				Thing();
+				strongOp = StrongOp();
+				rightThing = Thing();
+				leftThing = new BinaryExpression(leftThing.firstToken, leftThing, strongOp, rightThing);
+				strongOp = null;
+				rightThing = null;
 			} else {
 				break;
 			}
 		}
-		return;
+		if (strongOp == null && rightThing == null) {
+			return leftThing;
+		}
+		return new BinaryExpression(leftThing.firstToken, leftThing, strongOp, rightThing);
  	}
 	
-	private void StrongOp() throws SyntaxException {
+	private Token StrongOp() throws SyntaxException {
 		match(STRONG_OPS);
+		return consumedToken;
 	}
 	
 	private Expression Thing() throws SyntaxException {
-		Expression factor = Factor();
+		Expression leftFactor = Factor();
+		Token op = null;
+		Expression rightFactor = null;
 		while (true) {
 			if (isKind(VERY_STRONG_OPS)) {
-				VeryStrongOp();
-				Factor();
+				op = VeryStrongOp();
+				rightFactor = Factor();
+				leftFactor = new BinaryExpression(leftFactor.firstToken, leftFactor, op, rightFactor);
+				op = null;
+				rightFactor = null;
 			} else {
 				break;
 			}
 		}
-		return;
+		if (op == null && rightFactor == null) {
+			return leftFactor;
+		}
+		return new BinaryExpression(leftFactor.firstToken, leftFactor, op, rightFactor);
 	}
 	
-	private void VeryStrongOp() throws SyntaxException {
+	private Token VeryStrongOp() throws SyntaxException {
 		match(VERY_STRONG_OPS);
+		return consumedToken;
 	}
 	
 	private Expression Factor() throws SyntaxException {
@@ -497,53 +527,56 @@ public class Parser {
 		}
 		if (t.kind == LPAREN) {
 			match(LPAREN);
-			Expression(false, false);
+			Expression parenExpression = Expression(false, false);
 			match(RPAREN);
-			return;
+			return parenExpression;
 		}
 		if (t.kind == NOT) {
 			match(NOT);
-			Factor();
-			return;
+			Token op = consumedToken;
+			Expression factorExpression = Factor();
+			return new UnaryExpression(firstToken, op, factorExpression);
 		}
 		if (t.kind == MINUS) {
 			match(MINUS);
-			Factor();
-			return;
+			Token op = consumedToken;
+			Expression minusExpression = Factor();
+			return new UnaryExpression(firstToken, op, minusExpression);
 		}
 		if (t.kind == Kind.KW_SIZE) {
 			match(Kind.KW_SIZE);
 			match(LPAREN);
-			Expression(false, false);
+			Expression sizeExpression = Expression(false, false);
 			match(RPAREN);
-			return;
+			return new SizeExpression(firstToken, sizeExpression);
 		}
 		if (t.kind == Kind.KW_KEY) {
 			match(Kind.KW_KEY);
 			match(LPAREN);
-			Expression(false, false);
+			Expression keyExpression = Expression(false, false);
 			match(RPAREN);
-			return;
+			return new KeyExpression(firstToken, keyExpression);
 		}
 		if (t.kind == Kind.KW_VALUE) {
 			match(Kind.KW_VALUE);
 			match(LPAREN);
-			Expression(false, false);
+			Expression valueExpression = Expression(false, false);
 			match(RPAREN);
-			return;
+			return new ValueExpression(firstToken, valueExpression);
 		}
 		if (t.kind == LCURLY) {
-			Closure();
-			return;
+			Closure closure = Closure();
+			return new ClosureExpression(firstToken, closure);
 		}
 		if (t.kind == AT) {
 			match(AT);
+			Expression listExpression = null;
 			if (t.kind == AT) {
-				MapList(true);
+				listExpression = MapList(firstToken);
 			} else {
-				List(true);
+				listExpression = List(firstToken);
 			}
-			return;
+			return listExpression;
 		}
 		throw new SyntaxException(t, "Invalid token for Factor prefix!");
 	}
@@ -561,61 +594,64 @@ public class Parser {
 	}
 	
 	private List<Expression> ExpressionList() throws SyntaxException {
+		List<Expression> expressionList = new LinkedList<>();
 		if (isKind(FactorFirstSet)) {
-			Expression(false, false);
+			expressionList.add(Expression(false, false));
 			while (true) {
 				if (t.kind == COMMA) {
 					match(COMMA);
-					Expression(false, false);
+					expressionList.add(Expression(false, false));
 				} else {
 					break;
 				}
 			}
 		}
-		return;
+		return expressionList;
 	}
 	
-	private void MapList(final boolean firstAtMatched) throws SyntaxException {
-		if (!firstAtMatched) {
+	private MapListExpression MapList(Token firstToken) throws SyntaxException {
+		if (firstToken == null) {
 			match(AT);
+			firstToken = consumedToken;
 		}
 		match(AT);
 		match(LSQUARE);
-		KeyValueList();
+		List<KeyValueExpression> keyValueList = KeyValueList();
 		match(RSQUARE);
-		return;
+		return new MapListExpression(firstToken, keyValueList);
 	}
 	
-	private void KeyValueList() throws SyntaxException {
+	private List<KeyValueExpression> KeyValueList() throws SyntaxException {
+		List<KeyValueExpression> keyValueExpressions = new LinkedList<>();
 		if (isKind(FactorFirstSet)) {
-			KeyValueExpression();
+			keyValueExpressions.add(KeyValueExpression());
 			while (true) {
 				if (t.kind == COMMA) {
 					match(COMMA);
-					KeyValueExpression();
+					keyValueExpressions.add(KeyValueExpression());
 				} else {
 					break;
 				}
 			}
-		} else {
-			return;
 		}
+		return keyValueExpressions;
 	}
 	
-	private void KeyValueExpression() throws SyntaxException {
-		Expression(false, false);
+	private KeyValueExpression KeyValueExpression() throws SyntaxException {
+		Expression leftExpression = Expression(false, false);
 		match(COLON);
-		Expression(false, false);
-		return;
+		Expression rightExpression = Expression(false, false);
+		return new KeyValueExpression(leftExpression.firstToken, leftExpression, rightExpression);
 	}
 	
-	private void List(final boolean atMatched) throws SyntaxException {
-		if (!atMatched) {
+	private ListExpression List(Token firstToken) throws SyntaxException {
+		if (firstToken == null) {
 			match(AT);
+			firstToken = consumedToken;
 		}
 		match(LSQUARE);
-		ExpressionList();
+		List<Expression> expressionList = ExpressionList();
 		match(RSQUARE);
-		return;
+		return new ListExpression(firstToken, expressionList);
 	}
 }
