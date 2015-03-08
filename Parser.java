@@ -2,9 +2,12 @@ package cop5555sp15;
 
 import static cop5555sp15.TokenStream.Kind.*;
 
+import java.util.LinkedList;
+import java.util.List;
+
 import cop5555sp15.TokenStream.Kind;
 import cop5555sp15.TokenStream.Token;
-import cop5555sp15.ast.Program;
+import cop5555sp15.ast.*;
 
 public class Parser {
 
@@ -45,12 +48,20 @@ public class Parser {
 		}
 	}
 
+	@SuppressWarnings("serial")
+	public class ParseException extends Exception {
+		
+	}
+	
+	List<SyntaxException> exceptionList = new LinkedList<>();
 	TokenStream tokens;
 	Token t;
+	Token consumedToken;
 
 	Parser(TokenStream tokens) {
 		this.tokens = tokens;
 		t = tokens.nextToken();
+		consumedToken = null;
 	}
 
 	private Kind match(Kind kind) throws SyntaxException {
@@ -58,7 +69,9 @@ public class Parser {
 			consume();
 			return kind;
 		}
-		throw new SyntaxException(t, kind);
+		SyntaxException syntaxException = new SyntaxException(t, kind);
+		exceptionList.add(syntaxException);
+		throw syntaxException;
 	}
 
 	private Kind match(Kind... kinds) throws SyntaxException {
@@ -71,7 +84,9 @@ public class Parser {
 		for (Kind kind1 : kinds) {
 			sb.append(kind1).append(kind1).append(" ");
 		}
-		throw new SyntaxException(t, "expected one of " + sb.toString());
+		SyntaxException syntaxException = new SyntaxException(t, "expected one of " + sb.toString());
+		exceptionList.add(syntaxException);
+		throw syntaxException;
 	}
 
 	private boolean isKind(Kind kind) {
@@ -80,6 +95,7 @@ public class Parser {
 
 	private void consume() {
 		if (t.kind != EOF)
+			consumedToken = t;
 			t = tokens.nextToken();
 	}
 
@@ -105,170 +121,198 @@ public class Parser {
 											  MOD, Kind.KW_RETURN};
 
 
-	public Program parse() throws SyntaxException {
-		Program();
-		match(EOF);
-		
-		return null;
+	public Program parse() {
+		Program p = null;
+		try {
+			p = Program();
+			if (p != null) {
+				try {
+					match(EOF);
+				} catch (SyntaxException e) {
+					exceptionList.add(e);
+				}
+			}
+		} catch (ParseException e) {
+			return null;
+		}
+		if (exceptionList.isEmpty()) {
+			return p;
+		} else {
+			return null;
+		}
 	}
 
-	private void Program() throws SyntaxException {
-		ImportList();
-		match(KW_CLASS);
-		match(IDENT);
-		Block();
+	private Program Program() throws ParseException {
+		try {
+			Token firstToken = t;
+			List<QualifiedName> imports = ImportList();
+			match(KW_CLASS);
+			match(IDENT);
+			String className = consumedToken.getText();
+			Block block = Block();
+			return new Program(firstToken, imports, className, block);
+		} catch (SyntaxException e) {
+			exceptionList.add(e);
+			throw new ParseException();
+		}
 	}
 
-	private void ImportList() throws SyntaxException {
+	private List<QualifiedName> ImportList() throws SyntaxException {
+		List<QualifiedName> imports = new LinkedList<>();
 		while (true) {
 			try {
 				match(KW_IMPORT);
 			} catch (SyntaxException synEx) {
-				return;
+				return imports;
 			}
+			StringBuilder importNameBuilder = new StringBuilder();
+			Token firstToken = t;
 			match(IDENT);
+			importNameBuilder.append(consumedToken.getText());
 			if (t.kind == Kind.DOT) {
 				while (true) {
 					match(DOT);
+					importNameBuilder.append("/");
 					match(IDENT);
+					importNameBuilder.append(consumedToken.getText());
 					if (t.kind != Kind.DOT) {
 						break;
 					}
 				}
 			}
+			imports.add(new QualifiedName(firstToken, importNameBuilder.toString()));
 			match(SEMICOLON);
 			if (t.kind != Kind.KW_IMPORT) {
 				break;
 			}
 		}
-		return;
+		return imports;
 	}
 
-	private void Block() throws SyntaxException {
+	private Block Block() throws SyntaxException {
+		List<BlockElem> blockElems = new LinkedList<>();
+		Token firstToken = t;
 		match(LCURLY);
 		while (true) {
 			if (t.kind == Kind.KW_DEF) {
-				Declaration();
+				blockElems.add(Declaration());
 				match(SEMICOLON);
 			} else if (t.kind == RCURLY){
 				break;
 			} else {
-				Statement();
+				blockElems.add(Statement());
 				match(SEMICOLON);
 			}
 		}
 		match(RCURLY);
-		return;
+		return new Block(firstToken, blockElems);
 	}
 
-	private void Declaration() throws SyntaxException {
+	private Declaration Declaration() throws SyntaxException {
+		Token firstToken = t;
 		match(KW_DEF);
 		match(IDENT);
+		Token identToken = consumedToken;
 		if (t.kind == Kind.ASSIGN) {
-			ClosureDec(true);
+			return ClosureDec(firstToken, identToken);
 		} else {
-			VarDec(true);
+			return VarDec(identToken);
 		}
-		return;
 	}
 
-	private void ClosureDec(final boolean identMatched) throws SyntaxException {
-		if (!identMatched) {
-			match(IDENT);
-		}
+	private ClosureDec ClosureDec(final Token firstToken, final Token identToken) throws SyntaxException {
 		match(ASSIGN);
-		Closure();
-		return;
+		Closure closure = Closure();
+		return new ClosureDec(firstToken, identToken, closure);
 	}
 	
-	private void Closure() throws SyntaxException {
+	private Closure Closure() throws SyntaxException {
+		Token firstToken = t;
 		match(LCURLY);
-		FormalArgList();
+		List<VarDec> formalArgList = FormalArgList();
 		match(ARROW);
+		List<Statement> statementList = new LinkedList<>();
 		while (t.kind != RCURLY) {
-			Statement();
+			statementList.add(Statement());
 			match(SEMICOLON);
 		}
 		match(RCURLY);
+		return new Closure(firstToken, formalArgList, statementList);
 	}
 	
-	private void FormalArgList() throws SyntaxException {
+	private List<VarDec> FormalArgList() throws SyntaxException {
+		List<VarDec> formalArgList = new LinkedList<>();
 		if (t.kind != Kind.IDENT) {
-			return;
+			return formalArgList;
 		}
-		VarDec(false);
+		formalArgList.add(VarDec(null));
 		while (true) {
 			if (t.kind == COMMA) {
 				match(COMMA);
-				VarDec(false);
+				formalArgList.add(VarDec(null));
 			} else {
 				break;
 			}
 		}
-		return;
+		return formalArgList;
 	}
 	
-	private void VarDec(final boolean identMatched) throws SyntaxException {
-		if (!identMatched) {
+	private VarDec VarDec(Token identToken) throws SyntaxException {
+		if (identToken == null) {
 			match(IDENT);
+			identToken = consumedToken;
 		}
 		if (t.kind != Kind.COLON) {
-			return;
+			return new VarDec(identToken, identToken, new UndeclaredType(identToken));
 		}
 		match(COLON);
-		Type();
-		return;
+		Type type = Type();
+		return new VarDec(identToken, identToken, type);
 	}
 
-	private void Type() throws SyntaxException {
+	private Type Type() throws SyntaxException {
+		Token firstToken = t;
 		if (isKind(SimpleTypes)) {
-			SimpleType();
-			return;
+			return SimpleType(firstToken);
 		} 
 		if (t.kind == Kind.AT) {
 			match(AT);
 			if (t.kind == Kind.AT) {
-				KeyValueType(true);
-				return;
+				return KeyValueType(firstToken);
 			} 
 			if (t.kind == Kind.LSQUARE) {
-				ListType(true);
-				return;
+				return ListType(firstToken);
 			}
 		}
 		throw new SyntaxException(t, "Unable to match token to expected TYPE token.");
 	}
 	
-	private void SimpleType() throws SyntaxException {
+	private SimpleType SimpleType(final Token firstToken) throws SyntaxException {
 		match(SimpleTypes);
+		return new SimpleType(firstToken, consumedToken);
 	}
 	
-	private void KeyValueType(final boolean firstAtTokenConsumed) throws SyntaxException {
-		if (!firstAtTokenConsumed) {
-			match(AT);
-		}
+	private KeyValueType KeyValueType(final Token firstToken) throws SyntaxException {
 		match(AT);
 		match(LSQUARE);
-		SimpleType();
+		SimpleType simpleType = SimpleType(t);
 		match(COLON);
-		Type();
+		Type type = Type();
 		match(RSQUARE);
-		return;
+		return new KeyValueType(firstToken, simpleType, type);
 	}
 	
-	private void ListType(final boolean atTokenConsumed) throws SyntaxException {
-		if (!atTokenConsumed) {
-			match(AT);
-		}
+	private ListType ListType(final Token firstToken) throws SyntaxException {
 		match(LSQUARE);
-		Type();
+		Type type = Type();
 		match(RSQUARE);
-		return;
+		return new ListType(firstToken, type);
 	}
 	
-	private void Statement() throws SyntaxException {
+	private Statement Statement() throws SyntaxException {
+		Token firstToken = t;
 		if (t.kind == IDENT) {
-			LValue();
+			LValue lValue = LValue();
 			match(ASSIGN);
 			Expression(false, false);
 			return;
@@ -314,23 +358,27 @@ public class Parser {
 		return;
 	}
 	
-	private void LValue() throws SyntaxException {
+	private LValue LValue() throws SyntaxException {
+		Token firstToken = t;
 		match(IDENT);
+		Token identToken = consumedToken;
 		if (t.kind != LSQUARE) {
-			return;
+			return new IdentLValue(firstToken, identToken);
 		}
 		match(LSQUARE);
-		Expression(false, false);
+		Expression expression = Expression(false, false);
 		match(RSQUARE);
-		return;
+		return new ExpressionLValue(firstToken, identToken, expression);
 	}
 	
-	private void Expression(final boolean transferFromRangeExpr, final boolean allowTransferToRangeExpr) throws SyntaxException {
-		Term();
+	private Expression Expression(final boolean transferFromRangeExpr, final boolean allowTransferToRangeExpr) throws SyntaxException {
+		Expression leftTerm = Term();
+		Token relOp = null;
+		Expression rightTerm = null;
 		while (true) {
 			if (isKind(REL_OPS)) {
-				RelOp();
-				Term();
+				relOp = RelOp();
+				rightTerm = Term();
 			} else {
 				break;
 			}
@@ -338,7 +386,10 @@ public class Parser {
 		if (!transferFromRangeExpr && allowTransferToRangeExpr && t.kind == RANGE) {
 			RangeExpression(true);
 		}
-		return;
+		if (relOp == null && rightTerm == null) {
+			return leftTerm;
+		}
+		return new BinaryExpression(leftTerm.firstToken, leftTerm, relOp, rightTerm);
 	}
 	
 	private void RangeExpression(final boolean transferFromExpression) throws SyntaxException {
@@ -350,29 +401,36 @@ public class Parser {
 		return;
 	}
 	
-	private void RelOp() throws SyntaxException {
+	private Token RelOp() throws SyntaxException {
 		match(REL_OPS);
+		return consumedToken;
 	}
 	
-	private void Term() throws SyntaxException {
-		Elem();
+	private Expression Term() throws SyntaxException {
+		Expression leftElem = Elem();
+		Token weakOp = null;
+		Expression rightElem = null;
 		while (true) {
 			if (isKind(WEAK_OPS)) {
-				WeakOp();
-				Elem();
+				weakOp = WeakOp();
+				rightElem = Elem();
 			} else {
 				break;
 			}
 		}
-		return;
+		if (weakOp == null && rightElem == null) {
+			return leftElem;
+		}
+		return new BinaryExpression(leftElem.firstToken, leftElem, weakOp, rightElem);
 	}
 	
-	private void WeakOp() throws SyntaxException {
+	private Token WeakOp() throws SyntaxException {
 		match(WEAK_OPS);
+		return consumedToken;
 	}
 	
-	private void Elem() throws SyntaxException {
-		Thing();
+	private Expression Elem() throws SyntaxException {
+		Expression thing = Thing();
 		while (true) {
 			if (isKind(STRONG_OPS)) {
 				StrongOp();
@@ -388,8 +446,8 @@ public class Parser {
 		match(STRONG_OPS);
 	}
 	
-	private void Thing() throws SyntaxException {
-		Factor();
+	private Expression Thing() throws SyntaxException {
+		Expression factor = Factor();
 		while (true) {
 			if (isKind(VERY_STRONG_OPS)) {
 				VeryStrongOp();
@@ -405,35 +463,37 @@ public class Parser {
 		match(VERY_STRONG_OPS);
 	}
 	
-	private void Factor() throws SyntaxException {
+	private Expression Factor() throws SyntaxException {
+		Token firstToken = t;
 		if (t.kind == IDENT) {
 			match(IDENT);
+			Token identToken = consumedToken;
 			if (t.kind == LSQUARE) {
 				match(LSQUARE);
-				Expression(false, false);
+				Expression expression = Expression(false, false);
 				match(RSQUARE);
-				return;
+				return new ListOrMapElemExpression(firstToken, identToken, expression);
 			}
 			if (t.kind == LPAREN) {
-				ClosureEvalExpression(true);
+				return ClosureEvalExpression(firstToken, identToken);
 			}
-			return;
+			return new IdentExpression(firstToken, identToken);
 		}
 		if (t.kind == INT_LIT) {
 			match(INT_LIT);
-			return;
+			return new IntLitExpression(firstToken, consumedToken.getIntVal());
 		}
 		if (t.kind == BL_TRUE) {
 			match(BL_TRUE);
-			return;
+			return new BooleanLitExpression(firstToken, consumedToken.getBooleanVal());
 		}
 		if (t.kind == BL_FALSE) {
 			match(BL_FALSE);
-			return;
+			return new BooleanLitExpression(firstToken, consumedToken.getBooleanVal());
 		}
 		if (t.kind == STRING_LIT) {
 			match(STRING_LIT);
-			return;
+			return new StringLitExpression(firstToken, consumedToken.getText());
 		}
 		if (t.kind == LPAREN) {
 			match(LPAREN);
@@ -488,17 +548,19 @@ public class Parser {
 		throw new SyntaxException(t, "Invalid token for Factor prefix!");
 	}
 	
-	private void ClosureEvalExpression(final boolean identMatched) throws SyntaxException {
-		if (!identMatched) {
+	private ClosureEvalExpression ClosureEvalExpression(Token firstToken, Token identToken) throws SyntaxException {
+		if (identToken == null) {
 			match(IDENT);
+			firstToken = consumedToken;
+			identToken = consumedToken;
 		}
 		match(LPAREN);
-		ExpressionList();
+		List<Expression> listExpression = ExpressionList();
 		match(RPAREN);
-		return;
+		return new ClosureEvalExpression(firstToken, identToken, listExpression);
 	}
 	
-	private void ExpressionList() throws SyntaxException {
+	private List<Expression> ExpressionList() throws SyntaxException {
 		if (isKind(FactorFirstSet)) {
 			Expression(false, false);
 			while (true) {
